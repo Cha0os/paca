@@ -563,16 +563,46 @@ export async function getConversation(
 	return data.data;
 }
 
+// The API rejects any limit above 200 (parseOffsetLimit), so a conversation
+// with more events than that has to be walked page by page. Long agent runs
+// pass 200 routinely: an ACP turn persists two events per tool call — one when
+// it starts, one when it reaches a terminal status — so a single page covers
+// only ~100 tool calls.
+export const CONVERSATION_EVENTS_PAGE_SIZE = 200;
+
+/**
+ * Fetch a conversation's full event stream, in order.
+ *
+ * Pages until it has `total` events rather than returning just the first page:
+ * a truncated stream made a long run look frozen (the tail kept arriving in the
+ * database, but every realtime refetch re-read the same first page), and it
+ * also dropped the turn's closing FinishAction, which is where an ACP agent's
+ * final message lives.
+ */
 export async function listConversationEvents(
 	projectId: string,
 	conversationId: string,
 ): Promise<AgentConversationEvent[]> {
-	const { data } = await apiClient.instance.get<
-		SuccessEnvelope<{ items: AgentConversationEvent[] }>
-	>(`/projects/${projectId}/conversations/${conversationId}/events`, {
-		params: { limit: 200 },
-	});
-	return data.data.items;
+	const items: AgentConversationEvent[] = [];
+	let total = 0;
+
+	do {
+		const { data } = await apiClient.instance.get<
+			SuccessEnvelope<{ items: AgentConversationEvent[]; total?: number }>
+		>(`/projects/${projectId}/conversations/${conversationId}/events`, {
+			params: { limit: CONVERSATION_EVENTS_PAGE_SIZE, offset: items.length },
+		});
+		const page = data.data.items ?? [];
+		total = data.data.total ?? page.length;
+		items.push(...page);
+		// A short page means the server has nothing further to hand over. Break
+		// on it rather than trusting `total` alone: the two can disagree (a
+		// running conversation appends between requests), and that disagreement
+		// must not turn into an unbounded request loop.
+		if (page.length < CONVERSATION_EVENTS_PAGE_SIZE) break;
+	} while (items.length < total);
+
+	return items;
 }
 
 export async function stopConversation(

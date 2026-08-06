@@ -12,9 +12,14 @@ vi.mock("./api-client", () => ({
 	},
 }));
 
-import { listConversations } from "./agent-api";
+import {
+	CONVERSATION_EVENTS_PAGE_SIZE,
+	listConversationEvents,
+	listConversations,
+} from "./agent-api";
 
 const PROJECT_ID = "proj-1";
+const CONVERSATION_ID = "conv-1";
 
 function ok<T>(data: T) {
 	return { data: { data, success: true } };
@@ -121,6 +126,72 @@ describe("agent-api", () => {
 			const params = paramsOf();
 			expect(params.cursor).toBe("opaque-cursor");
 			expect(params.page_size).toBe(50);
+		});
+	});
+
+	describe("listConversationEvents", () => {
+		function eventPage(startIndex: number, count: number, total: number) {
+			return ok({
+				items: Array.from({ length: count }, (_, i) => ({
+					id: `event-${startIndex + i}`,
+					conversation_id: CONVERSATION_ID,
+					event_index: startIndex + i,
+					event_type: "ACPToolCallEvent",
+					event_source: "agent",
+					payload: {},
+					created_at: "2026-01-01T00:00:00Z",
+				})),
+				total,
+			});
+		}
+
+		it("issues a single request when the stream fits in one page", async () => {
+			mockGet.mockResolvedValueOnce(eventPage(0, 12, 12));
+
+			const events = await listConversationEvents(PROJECT_ID, CONVERSATION_ID);
+
+			expect(mockGet).toHaveBeenCalledTimes(1);
+			expect(paramsOf()).toEqual({
+				limit: CONVERSATION_EVENTS_PAGE_SIZE,
+				offset: 0,
+			});
+			expect(events).toHaveLength(12);
+		});
+
+		it("pages through a stream longer than the server's limit", async () => {
+			mockGet
+				.mockResolvedValueOnce(eventPage(0, 200, 450))
+				.mockResolvedValueOnce(eventPage(200, 200, 450))
+				.mockResolvedValueOnce(eventPage(400, 50, 450));
+
+			const events = await listConversationEvents(PROJECT_ID, CONVERSATION_ID);
+
+			expect(mockGet).toHaveBeenCalledTimes(3);
+			expect(paramsOf(0).offset).toBe(0);
+			expect(paramsOf(1).offset).toBe(200);
+			expect(paramsOf(2).offset).toBe(400);
+			// Every event, still in ascending event_index order.
+			expect(events).toHaveLength(450);
+			expect(events[0].event_index).toBe(0);
+			expect(events.at(-1)?.event_index).toBe(449);
+		});
+
+		it("stops on a short page even when total overstates what is available", async () => {
+			mockGet.mockResolvedValueOnce(eventPage(0, 10, 999));
+
+			const events = await listConversationEvents(PROJECT_ID, CONVERSATION_ID);
+
+			expect(mockGet).toHaveBeenCalledTimes(1);
+			expect(events).toHaveLength(10);
+		});
+
+		it("tolerates a response without a total", async () => {
+			mockGet.mockResolvedValueOnce(ok({ items: [] }));
+
+			const events = await listConversationEvents(PROJECT_ID, CONVERSATION_ID);
+
+			expect(mockGet).toHaveBeenCalledTimes(1);
+			expect(events).toEqual([]);
 		});
 	});
 });

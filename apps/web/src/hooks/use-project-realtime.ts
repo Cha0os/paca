@@ -56,6 +56,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import {
+	type ConversationEventsTail,
+	conversationEventsTailKey,
+} from "@/lib/agent-api";
+import {
 	connectSocket,
 	joinProject,
 	leaveProject,
@@ -190,6 +194,23 @@ export function useProjectRealtime(projectId: string | undefined): void {
 						? event.payload.conversation_id
 						: null;
 				if (conversationId) {
+					// How far the stream has grown, for views holding a window of
+					// events. `event_index` is absent on older API builds; the tick
+					// alone still prompts a fetch, it just cannot say how many events
+					// are waiting.
+					const eventIndex = Number.parseInt(
+						String(event.payload.event_index ?? ""),
+						10,
+					);
+					queryClient.setQueryData(
+						conversationEventsTailKey(conversationId),
+						(prev: ConversationEventsTail | undefined) => ({
+							tick: (prev?.tick ?? 0) + 1,
+							index: Number.isFinite(eventIndex)
+								? Math.max(prev?.index ?? -1, eventIndex)
+								: (prev?.index ?? null),
+						}),
+					);
 					void queryClient.invalidateQueries({
 						queryKey: [
 							"projects",

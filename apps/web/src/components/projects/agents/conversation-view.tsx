@@ -24,7 +24,6 @@ import {
 	CONVERSATION_HEARTBEAT_INTERVAL_MS,
 	CONVERSATION_STATUS_COLORS,
 	CONVERSATION_STATUS_LABELS,
-	conversationEventsQueryOptions,
 	conversationQueryOptions,
 	heartbeatConversation,
 	pauseConversation,
@@ -37,6 +36,8 @@ import {
 	eventsToThreadMessages,
 	extractTextOnlyContent,
 } from "./conversation-to-thread-messages";
+import { LoadOlderEvents, TailFollowIndicator } from "./event-window-controls";
+import { useConversationEventWindow } from "./use-conversation-event-window";
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 
@@ -132,9 +133,22 @@ export function ConversationView({
 		isLoading: convLoading,
 		isError,
 	} = useQuery(conversationQueryOptions(projectId, conversationId));
-	const { data: events = [], isLoading: eventsLoading } = useQuery(
-		conversationEventsQueryOptions(projectId, conversationId),
-	);
+	const {
+		events,
+		isLoading: eventsLoading,
+		hasOlder,
+		isLoadingOlder,
+		loadOlder,
+		newBelow,
+		following,
+		setFollowing,
+		jumpToLatest,
+	} = useConversationEventWindow({
+		projectId,
+		conversationId,
+		eventCount: conversation?.event_count,
+		ready: !convLoading,
+	});
 	const { data: agent } = useQuery({
 		...agentQueryOptions(projectId, conversation?.agent_id ?? ""),
 		enabled: !!conversation?.agent_id,
@@ -355,7 +369,27 @@ export function ConversationView({
 			{/* Thread */}
 			<div className="flex-1 min-h-0">
 				<AssistantRuntimeProvider runtime={runtime}>
-					<Thread />
+					<Thread
+						turnAnchor="bottom"
+						// A run starting must not pull a reader who is paging back
+						// through history.
+						scrollToBottomOnRunStart={false}
+						viewportHeader={
+							<LoadOlderEvents
+								hasOlder={hasOlder}
+								isLoadingOlder={isLoadingOlder}
+								loadOlder={loadOlder}
+							/>
+						}
+						viewportOverlay={
+							<TailFollowIndicator
+								newBelow={newBelow}
+								following={following}
+								setFollowing={setFollowing}
+								jumpToLatest={jumpToLatest}
+							/>
+						}
+					/>
 				</AssistantRuntimeProvider>
 			</div>
 

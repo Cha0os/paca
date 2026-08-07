@@ -15,6 +15,7 @@ vi.mock("./api-client", () => ({
 import {
 	CONVERSATION_EVENTS_PAGE_SIZE,
 	listConversationEvents,
+	listConversationEventWindow,
 	listConversations,
 } from "./agent-api";
 
@@ -192,6 +193,39 @@ describe("agent-api", () => {
 
 			expect(mockGet).toHaveBeenCalledTimes(1);
 			expect(events).toEqual([]);
+		});
+	});
+	describe("listConversationEventWindow", () => {
+		it("requests exactly the window it was asked for", async () => {
+			mockGet.mockResolvedValueOnce(ok({ items: [], total: 900 }));
+
+			const page = await listConversationEventWindow(
+				PROJECT_ID,
+				CONVERSATION_ID,
+				{ offset: 700, limit: 200 },
+			);
+
+			expect(mockGet).toHaveBeenCalledWith(
+				`/projects/${PROJECT_ID}/conversations/${CONVERSATION_ID}/events`,
+				{ params: { limit: 200, offset: 700 } },
+			);
+			expect(page.total).toBe(900);
+		});
+
+		it("infers a total from the window when the API omits one", async () => {
+			mockGet.mockResolvedValueOnce(
+				ok({ items: [{ event_index: 10 }, { event_index: 11 }] }),
+			);
+
+			const page = await listConversationEventWindow(
+				PROJECT_ID,
+				CONVERSATION_ID,
+				{ offset: 10, limit: 200 },
+			);
+
+			// Offset plus what came back is the least it can be.
+			expect(page.total).toBe(12);
+			expect(page.items).toHaveLength(2);
 		});
 	});
 });

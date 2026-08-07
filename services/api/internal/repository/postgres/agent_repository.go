@@ -94,6 +94,7 @@ type agentConversationRecord struct {
 	ContainerID         *string    `db:"container_id"`
 	HostPort            *int       `db:"host_port"`
 	IterationCount      int64      `db:"iteration_count"`
+	EventCount          int64      `db:"event_count"`
 	ErrorMessage        *string    `db:"error_message"`
 	RepoPluginID        *string    `db:"repo_plugin_id"`
 	RepoCloneURL        *string    `db:"repo_clone_url"`
@@ -585,6 +586,8 @@ const conversationCols = `id, agent_id, project_id, trigger_type, task_id, comme
 	triggered_by_member_id, status, container_id, host_port,
 	(SELECT COUNT(*) FROM agent_conversation_events e
 	 WHERE e.conversation_id = agent_conversations.id AND e.event_type = 'ActionEvent') AS iteration_count,
+	(SELECT COUNT(*) FROM agent_conversation_events e
+	 WHERE e.conversation_id = agent_conversations.id) AS event_count,
 	error_message,
 	repo_plugin_id, repo_clone_url, branch_name, pr_url, persistence_dir,
 	started_at, finished_at, created_at, updated_at`
@@ -1057,6 +1060,7 @@ func conversationFromRecord(rec agentConversationRecord) *agentdom.AgentConversa
 		ContainerID:    rec.ContainerID,
 		HostPort:       rec.HostPort,
 		IterationCount: int(rec.IterationCount),
+		EventCount:     int(rec.EventCount),
 		ErrorMessage:   rec.ErrorMessage,
 		RepoCloneURL:   rec.RepoCloneURL,
 		BranchName:     rec.BranchName,

@@ -161,6 +161,8 @@ export interface AgentConversation {
 	triggered_by_member_id?: string;
 	status: ConversationStatus;
 	iteration_count: number;
+	/** Number of persisted events. Absent on an API that predates the field. */
+	event_count?: number;
 	error_message?: string | null;
 	branch_name?: string | null;
 	pr_url?: string | null;
@@ -563,22 +565,34 @@ export async function getConversation(
 	return data.data;
 }
 
-// The API rejects any limit above 200 (parseOffsetLimit), so a conversation
-// with more events than that has to be walked page by page. Long agent runs
-// pass 200 routinely: an ACP turn persists two events per tool call — one when
-// it starts, one when it reaches a terminal status — so a single page covers
-// only ~100 tool calls.
+/** The API rejects any limit above this (see parseOffsetLimit). */
 export const CONVERSATION_EVENTS_PAGE_SIZE = 200;
 
+/** Fetch a conversation's full event stream, in order, page by page. */
+export type ConversationEventPage = {
+	items: AgentConversationEvent[];
+	/** Total events in the conversation, as reported by the server. */
+	total: number;
+};
+
 /**
- * Fetch a conversation's full event stream, in order.
- *
- * Pages until it has `total` events rather than returning just the first page:
- * a truncated stream made a long run look frozen (the tail kept arriving in the
- * database, but every realtime refetch re-read the same first page), and it
- * also dropped the turn's closing FinishAction, which is where an ACP agent's
- * final message lives.
+ * Fetch one window of a conversation's events. `event_index` is gapless, so
+ * `offset` addresses events directly and keeps doing so as the stream grows.
  */
+export async function listConversationEventWindow(
+	projectId: string,
+	conversationId: string,
+	{ offset, limit }: { offset: number; limit: number },
+): Promise<ConversationEventPage> {
+	const { data } = await apiClient.instance.get<
+		SuccessEnvelope<{ items: AgentConversationEvent[]; total?: number }>
+	>(`/projects/${projectId}/conversations/${conversationId}/events`, {
+		params: { limit, offset },
+	});
+	const items = data.data.items ?? [];
+	return { items, total: data.data.total ?? offset + items.length };
+}
+
 export async function listConversationEvents(
 	projectId: string,
 	conversationId: string,
@@ -587,19 +601,15 @@ export async function listConversationEvents(
 	let total = 0;
 
 	do {
-		const { data } = await apiClient.instance.get<
-			SuccessEnvelope<{ items: AgentConversationEvent[]; total?: number }>
-		>(`/projects/${projectId}/conversations/${conversationId}/events`, {
-			params: { limit: CONVERSATION_EVENTS_PAGE_SIZE, offset: items.length },
+		const page = await listConversationEventWindow(projectId, conversationId, {
+			offset: items.length,
+			limit: CONVERSATION_EVENTS_PAGE_SIZE,
 		});
-		const page = data.data.items ?? [];
-		total = data.data.total ?? page.length;
-		items.push(...page);
-		// A short page means the server has nothing further to hand over. Break
-		// on it rather than trusting `total` alone: the two can disagree (a
-		// running conversation appends between requests), and that disagreement
-		// must not turn into an unbounded request loop.
-		if (page.length < CONVERSATION_EVENTS_PAGE_SIZE) break;
+		total = page.total;
+		items.push(...page.items);
+		// A short page means nothing further is available. `total` alone is not
+		// enough: a running conversation appends between requests.
+		if (page.items.length < CONVERSATION_EVENTS_PAGE_SIZE) break;
 	} while (items.length < total);
 
 	return items;
@@ -801,6 +811,38 @@ export const conversationEventsQueryOptions = (
 			"events",
 		],
 		queryFn: () => listConversationEvents(projectId, conversationId),
+	});
+
+// Must stay outside ["projects", projectId, "conversations", …]: the realtime
+// handler invalidates that whole prefix, which would reset this entry.
+export const conversationEventsTailKey = (
+	projectId: string,
+	conversationId: string,
+) => ["conversation-events-tail", projectId, conversationId];
+
+/**
+ * Notification channel, not a data source: `useProjectRealtime` writes the
+ * highest `event_index` it has seen and observers re-render.
+ */
+export type ConversationEventsTail = { tick: number; index: number | null };
+
+const CONVERSATION_EVENTS_TAIL_INITIAL: ConversationEventsTail = {
+	tick: 0,
+	index: null,
+};
+
+export const conversationEventsTailQueryOptions = (
+	projectId: string,
+	conversationId: string,
+) =>
+	queryOptions({
+		queryKey: conversationEventsTailKey(projectId, conversationId),
+		// Never fetched: a refetch would replace the signal with the initial value.
+		queryFn: (): ConversationEventsTail => CONVERSATION_EVENTS_TAIL_INITIAL,
+		enabled: false,
+		initialData: CONVERSATION_EVENTS_TAIL_INITIAL,
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: Number.POSITIVE_INFINITY,
 	});
 
 export const chatSessionsQueryOptions = (projectId: string, agentId: string) =>

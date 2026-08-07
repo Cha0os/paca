@@ -169,7 +169,9 @@ type AgentConversation struct {
 	ContainerID         *string
 	HostPort            *int
 	IterationCount      int
-	ErrorMessage        *string
+	// EventCount is the number of persisted events.
+	EventCount     int
+	ErrorMessage   *string
 	RepoPluginID        *uuid.UUID
 	RepoCloneURL        *string
 	BranchName          *string

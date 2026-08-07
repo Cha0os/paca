@@ -361,7 +361,10 @@ async def persist_conversation_event(
             "status": "running",
         }
     )
+    # The index lets a client holding a window of events fetch only what it is
+    # missing.
     await stream_store.publish_realtime(
+        extra_payload={"event_index": event_index},
         project_id=project_id,
         conversation_id=conversation_id,
         event_type=f"agent.{event_type.lower()}",

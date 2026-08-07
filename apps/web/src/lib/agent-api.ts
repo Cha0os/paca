@@ -1413,6 +1413,9 @@ export const conversationEventCountQueryOptions = ({
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 
+/** A page carries its own limit so a short hop cannot overlap what is loaded. */
+type ConversationEventWindowParam = { offset: number; limit: number };
+
 export const conversationEventWindowInfiniteOptions = ({
 	projectId,
 	conversationId,
@@ -1430,26 +1433,38 @@ export const conversationEventWindowInfiniteOptions = ({
 }) =>
 	infiniteQueryOptions({
 		queryKey: conversationEventWindowKey(conversationId),
-		queryFn: ({ pageParam }: { pageParam: number }) =>
+		queryFn: ({ pageParam }: { pageParam: ConversationEventWindowParam }) =>
 			projectId === undefined
-				? listGlobalConversationEventWindow(conversationId, {
-						offset: pageParam,
-						limit: pageSize,
-					})
-				: listConversationEventWindow(projectId, conversationId, {
-						offset: pageParam,
-						limit: pageSize,
-					}),
-		initialPageParam: Math.max(0, count - pageSize),
-		getPreviousPageParam: (_first, _all, firstPageParam) =>
-			firstPageParam > 0 ? Math.max(0, firstPageParam - pageSize) : undefined,
-		getNextPageParam: (lastPage, _all, lastPageParam) => {
+				? listGlobalConversationEventWindow(conversationId, pageParam)
+				: listConversationEventWindow(projectId, conversationId, pageParam),
+		initialPageParam: {
+			offset: Math.max(0, count - pageSize),
+			limit: pageSize,
+		} as ConversationEventWindowParam,
+		getPreviousPageParam: (
+			_first,
+			_all,
+			firstPageParam,
+		): ConversationEventWindowParam | undefined =>
+			firstPageParam.offset > 0
+				? {
+						offset: Math.max(0, firstPageParam.offset - pageSize),
+						// Clamped: the last hop backwards is usually shorter than a full
+						// page, and a full one would refetch events already held.
+						limit: Math.min(pageSize, firstPageParam.offset),
+					}
+				: undefined,
+		getNextPageParam: (
+			lastPage,
+			_all,
+			lastPageParam,
+		): ConversationEventWindowParam | undefined => {
 			// An empty page means the server has nothing further, whatever the
 			// counts say — without this the next param would not advance.
 			if (lastPage.items.length === 0) return undefined;
-			const next = lastPageParam + lastPage.items.length;
+			const next = lastPageParam.offset + lastPage.items.length;
 			const known = Math.max(lastPage.total, (tailIndex ?? -1) + 1);
-			return next < known ? next : undefined;
+			return next < known ? { offset: next, limit: pageSize } : undefined;
 		},
 		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: false,

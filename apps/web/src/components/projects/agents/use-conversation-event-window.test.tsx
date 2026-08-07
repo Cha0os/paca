@@ -268,4 +268,24 @@ describe("useConversationEventWindow", () => {
 			expect(key[0]).not.toBe("global-chat");
 		}
 	});
+	it("keeps paging back to the start without overlapping what is held", async () => {
+		fakeStream(250);
+		const { result } = open({ eventCount: 250, pageSize: 100 });
+		await waitFor(() => expect(result.current.events).toHaveLength(100));
+
+		act(() => result.current.loadOlder());
+		await waitFor(() => expect(result.current.events).toHaveLength(200));
+
+		// The last hop back covers 50 events, not a full page: asking for a full
+		// one would refetch events 50..99, which are already loaded.
+		act(() => result.current.loadOlder());
+		await waitFor(() => expect(result.current.events).toHaveLength(250));
+
+		expect(result.current.events[0].event_index).toBe(0);
+		expect(result.current.hasOlder).toBe(false);
+		// One unbroken ascending run, no duplicates.
+		expect(result.current.events.map((e) => e.event_index)).toEqual(
+			Array.from({ length: 250 }, (_, i) => i),
+		);
+	});
 });

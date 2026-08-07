@@ -44,29 +44,35 @@ export function useGlobalAgentRealtime(enabled = true): void {
 				typeof event.payload.conversation_id === "string"
 					? event.payload.conversation_id
 					: null;
+			// A persisted event carries its index and changes only the event stream;
+			// the conversation's own fields change on lifecycle messages.
+			const eventIndex = Number.parseInt(
+				String(event.payload.event_index ?? ""),
+				10,
+			);
+			const isPersistedEvent = Number.isFinite(eventIndex);
+
 			if (conversationId) {
-				// How far the stream has grown, for views holding a window of
-				// events. `event_index` is absent on older API builds; the tick
-				// alone still prompts a fetch, it just cannot say how many events
-				// are waiting.
-				const eventIndex = Number.parseInt(
-					String(event.payload.event_index ?? ""),
-					10,
-				);
 				queryClient.setQueryData(
 					conversationEventsTailKey(conversationId),
 					(prev: ConversationEventsTail | undefined) => ({
 						tick: (prev?.tick ?? 0) + 1,
-						index: Number.isFinite(eventIndex)
+						index: isPersistedEvent
 							? Math.max(prev?.index ?? -1, eventIndex)
 							: (prev?.index ?? null),
 					}),
 				);
+				// For views that read the whole event list.
+				void queryClient.invalidateQueries({
+					queryKey: ["global-chat", "conversations", conversationId, "events"],
+				});
 			}
 
-			void queryClient.invalidateQueries({
-				queryKey: ["global-chat", "conversations"],
-			});
+			if (!isPersistedEvent) {
+				void queryClient.invalidateQueries({
+					queryKey: ["global-chat", "conversations"],
+				});
+			}
 		}
 
 		socket.on("event", handleEvent);
